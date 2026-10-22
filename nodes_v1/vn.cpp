@@ -23,13 +23,13 @@ struct neighbour {
 };
 struct nodeinfo {
     int id;
-    vector<int> adj;
+    vector<pair<int,int>> adj;
     int seq;
 };
 
 vector<neighbour> parse_on(const char* c);
-nodeinfo to_nodeinfo(const vector<neighbour>& v);
-string make_lsp(const vector<neighbour>& v);
+nodeinfo to_nodeinfo(const vector<neighbour>& v,int self);
+string make_lsp(const nodeinfo& v);
 nodeinfo parse_lsp(const char* c);
 
 int main(int argc,char** argv) {
@@ -82,7 +82,6 @@ int main(int argc,char** argv) {
         cerr<<"Connection failed\n";
         return -1;
     }
-    fcntl(sd_tcp, F_SETFL, O_NONBLOCK);
     unsigned int sock_sz=sizeof(sockaddr);
     getsockname(sd_tcp,(sockaddr *)&sock_tcp,&sock_sz);
 
@@ -108,12 +107,13 @@ int main(int argc,char** argv) {
 
     vector<neighbour> adj;
     map<int,nodeinfo> graph;
-    char* recv_msg=new char[100];
+    char recv_msg[100];
     recv(sd_tcp,recv_msg,100,0);
+    fcntl(sd_tcp, F_SETFL, O_NONBLOCK);
     cout<<recv_msg<<'\n';
     adj=parse_on(recv_msg);
     int self=-1;
-    int seq=0;
+    int seq=-1;
     auto start=steady_clock::now();
 
     for(auto& neigh:adj) {
@@ -130,14 +130,15 @@ int main(int argc,char** argv) {
             neigh.sock=sock;
         }
     }
-    graph.insert({self,to_nodeinfo(adj)});
+    seq++;
+    graph.insert({self,to_nodeinfo(adj,self)});
+    graph[self].seq=seq;
 
-    string temp=make_lsp(adj);
+    string temp=make_lsp(graph[self]);
     const char* msg=temp.c_str();
     for(auto& neigh:adj) {
         if(neigh.id!=self) sendto(sd_udp,msg,temp.length(),0,(sockaddr*)&neigh.sock,sizeof(sockaddr));
     }
-    seq++;
 
     fd_set read_fds;
     auto next_lsp=steady_clock::now()+seconds(10);
@@ -155,7 +156,7 @@ int main(int argc,char** argv) {
         }
 
         if(FD_ISSET(sd_tcp,&read_fds)) {
-            char* recv_msg=new char[100];
+            char recv_msg[100];
             recv(sd_tcp,recv_msg,100,0);
             cout<<recv_msg<<'\n';
             vector<neighbour> new_local=parse_on(recv_msg);
@@ -164,59 +165,58 @@ int main(int argc,char** argv) {
                     if(neww.id==old.id) old.cost=neww.cost;
                 }
             }
-            graph[self]=to_nodeinfo(adj);
+            seq++;
+            graph[self]=to_nodeinfo(adj,self);
+            graph[self].seq=seq;
 
-            string temp=make_lsp(adj);
+            string temp=make_lsp(graph[self]);
             const char* msg=temp.c_str();
             for(auto& neigh:adj) {
                 if(neigh.id!=self) sendto(sd_udp,msg,temp.length(),0,(sockaddr*)&neigh.sock,sizeof(sockaddr));
             }
-            seq++;
         }
 
         if(FD_ISSET(sd_udp,&read_fds)) {
-            char* s=new char[100];
+            char s[100];
             unsigned int len=sizeof(sockaddr);
 
-            for(int i=0;i<adj.size();i++) {
-                auto sock=adj[i].sock;
-                auto ret=recvfrom(sd_udp,s,100,0,(sockaddr*)&sock,&len);
+            sockaddr_in sock;
+            auto ret=recvfrom(sd_udp,s,100,0,(sockaddr*)&sock,&len);
 
-                if(ret>0) {
-                    cout<<s<<'\n';
-                    nodeinfo ls=parse_lsp(s);
-                    if(graph.find(ls.id)==graph.end()) {
-                        graph.insert({ls.id,ls});
+            if(ret>0) {
+                cout<<s<<'\n';
+                nodeinfo ls=parse_lsp(s);
+                if(graph.find(ls.id)==graph.end()) {
+                    graph.insert({ls.id,ls});
 
-                        string temp(s);
-                        const char* msg=temp.c_str();
-                        for(auto& neigh:adj) {
-                            if(neigh.id!=self) sendto(sd_udp,msg,temp.length(),0,(sockaddr*)&neigh.sock,sizeof(sockaddr));
-                        }
+                    string temp(s);
+                    const char* msg=temp.c_str();
+                    for(auto& neigh:adj) {
+                        if(neigh.id!=self) sendto(sd_udp,msg,temp.length(),0,(sockaddr*)&neigh.sock,sizeof(sockaddr));
                     }
+                }
 
-                    else if(ls.seq>graph[ls.id].seq) {
-                        graph[ls.id]=ls;
+                else if(ls.seq>graph[ls.id].seq) {
+                    graph[ls.id]=ls;
 
-                        string temp(s);
-                        const char* msg=temp.c_str();
-                        for(auto& neigh:adj) {
-                            if(neigh.id!=self) sendto(sd_udp,msg,temp.length(),0,(sockaddr*)&neigh.sock,sizeof(sockaddr));
-                        }
+                    string temp(s);
+                    const char* msg=temp.c_str();
+                    for(auto& neigh:adj) {
+                        if(neigh.id!=self) sendto(sd_udp,msg,temp.length(),0,(sockaddr*)&neigh.sock,sizeof(sockaddr));
                     }
-                    break;
                 }
             }
         }
 
-        if (steady_clock::now() >= next_lsp) {
+        if(steady_clock::now()>=next_lsp) {
             next_lsp+=seconds(10);
-            string temp=make_lsp(adj);
+            seq++;
+            graph[self].seq=seq;
+            string temp=make_lsp(graph[self]);
             const char* msg=temp.c_str();
             for(auto& neigh:adj) {
                 if(neigh.id!=self) sendto(sd_udp,msg,temp.length(),0,(sockaddr*)&neigh.sock,sizeof(sockaddr));
             }
-            seq++;
             start=steady_clock::now();
         }
 
