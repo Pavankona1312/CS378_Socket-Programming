@@ -8,6 +8,8 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <cerrno>
+#include <algorithm>
 #include <vector>
 #include <map>
 #include <chrono>
@@ -15,6 +17,7 @@ using namespace std;
 using namespace std::chrono;
 
 struct neighbour {
+public:
     int id;
     string ip;
     int port;
@@ -22,38 +25,38 @@ struct neighbour {
     sockaddr_in sock;
 };
 struct nodeinfo {
+public:
     int id;
-    vector<pair<int,int>> adj;
+    map<int,int> adj;
     int seq;
 };
 
-
-vector<neighbour> parse_on(const uint8_t* p, ssize_t n) {
-    vector<neighbour> v;
-    for (size_t off=0; off+11<=(size_t)n; off+=11) {
+void parse_on(const uint8_t* p,vector<neighbour>& v,ssize_t n) {
+    v.clear();
+    for(size_t off=0;off+11<=(size_t)n;off+=11) {
         neighbour nb;
-        nb.id = p[off]-'A';
+        nb.id=p[off]-'A';
 
         char ipstr[INET_ADDRSTRLEN];
-        inet_ntop(AF_INET, p+off+1, ipstr, sizeof(ipstr));
-        nb.ip = ipstr;
+        inet_ntop(AF_INET,p+off+1,ipstr,sizeof(ipstr));
+        nb.ip=ipstr;
 
         uint16_t port_n;
-        memcpy(&port_n, p+off+5, 2);
-        nb.port = ntohs(port_n);
+        memcpy(&port_n,p+off+5,2);
+        nb.port=ntohs(port_n);
 
         uint32_t cost_n;
-        memcpy(&cost_n, p+off+7, 4);
-        nb.cost = (int32_t)ntohl(cost_n);
+        memcpy(&cost_n,p+off+7,4);
+        nb.cost=(int32_t)ntohl(cost_n);
 
-        memset(&nb.sock, 0, sizeof(nb.sock));
-        nb.sock.sin_family = AF_INET;
-        nb.sock.sin_port = htons(nb.port);
-        inet_pton(AF_INET, nb.ip.c_str(), &nb.sock.sin_addr);
+        memset(&nb.sock,0,sizeof(nb.sock));
+        nb.sock.sin_family=AF_INET;
+        nb.sock.sin_port=htons(nb.port);
+        const char* ip_c=nb.ip.c_str();
+        nb.sock.sin_addr.s_addr=inet_addr(ip_c);
 
         v.push_back(nb);
     }
-    return v;
 }
 
 nodeinfo to_nodeinfo(const vector<neighbour>& v, int self) {
@@ -62,7 +65,7 @@ nodeinfo to_nodeinfo(const vector<neighbour>& v, int self) {
     ni.seq = 0;
     for (const auto& nb : v) {
         if (nb.id != self && nb.cost >= 0)
-            ni.adj.push_back({nb.id, nb.cost});
+            ni.adj.insert({nb.id, nb.cost});
     }
     return ni;
 }
@@ -90,7 +93,7 @@ nodeinfo parse_lsp(const uint8_t* p, ssize_t n) {
     ls.seq = -1;
     if (n < 6) return ls;
 
-    ls.id = p[0]-'A';
+    ls.id = p[0] - 'A';
 
     uint32_t seq_n;
     memcpy(&seq_n, p + 1, 4);
@@ -102,9 +105,20 @@ nodeinfo parse_lsp(const uint8_t* p, ssize_t n) {
         int nid = p[off] - 'A';
         uint32_t cost_n;
         memcpy(&cost_n, p + off + 1, 4);
-        ls.adj.push_back({nid, (int)(int32_t)ntohl(cost_n)});
+        ls.adj[nid]=(int)(int32_t)ntohl(cost_n);
     }
     return ls;
+}
+
+void print_graph(map<int,nodeinfo> graph) {
+    for(auto [id,info]:graph) {
+        auto adj=info.adj;
+        cout<<"From "<<id<<": ";
+        for(auto [n,cost]:adj) {
+            cout<<n<<"-"<<cost<<" ";
+        }
+        cout<<"\n";
+    }
 }
 
 int main(int argc,char** argv) {
@@ -137,11 +151,9 @@ int main(int argc,char** argv) {
     const char* ip_vn_c=ip_vn.c_str();
     sock_udp.sin_addr.s_addr=inet_addr(ip_vn_c);
     memset(&sock_udp.sin_zero,'\0',8);
-    if (::bind(sd_udp, reinterpret_cast<sockaddr*>(&sock_udp),
-               sizeof(sock_udp)) < 0) {
-        perror("UDP bind");
-        close(sd_udp);
-        return 1;
+    if(bind(sd_udp,(sockaddr*)&sock_udp,sizeof(sockaddr))<0) {
+        cerr<<"Binding failed\n";
+        return -1;
     }
 
     int sd_tcp=socket(AF_INET,SOCK_STREAM,0);
@@ -189,7 +201,8 @@ int main(int argc,char** argv) {
     ssize_t siz = recv(sd_tcp,recv_msg,1024,0);
     fcntl(sd_tcp, F_SETFL, O_NONBLOCK);
     if(siz<=0) {cout << "Oracle Node closed the TCP connection.\n"; return -1;}
-    adj=parse_on(recv_msg,siz);
+    // cout<<recv_msg<<'\n';
+    parse_on(recv_msg,adj,siz);
     int self=-1;
     int seq=-1;
     auto start=steady_clock::now();
@@ -197,15 +210,6 @@ int main(int argc,char** argv) {
     for(auto& neigh:adj) {
         if(neigh.cost==0) {
             self=neigh.id;
-        }
-        else {
-            sockaddr_in sock;
-            sock.sin_family=AF_INET;
-            sock.sin_port=htons(neigh.port);
-            const char* ip_c=neigh.ip.c_str();
-            sock.sin_addr.s_addr=inet_addr(ip_c);
-            memset(&sock.sin_zero,'\0',8);
-            neigh.sock=sock;
         }
     }
     seq++;
@@ -221,6 +225,7 @@ int main(int argc,char** argv) {
     fd_set read_fds;
     auto next_lsp=steady_clock::now()+seconds(10);
     while(1) {
+
         FD_ZERO(&read_fds);;
         FD_SET(sd_tcp,&read_fds);
         FD_SET(sd_udp,&read_fds);
@@ -235,13 +240,8 @@ int main(int argc,char** argv) {
         if(FD_ISSET(sd_tcp,&read_fds)) {
             uint8_t recv_msg[1024];
             ssize_t siz = recv(sd_tcp,recv_msg,1024,0);
-            cout<<recv_msg<<'\n';
-            vector<neighbour> new_local=parse_on(recv_msg, siz);
-            for(auto &old:adj) {
-                for(auto neww:new_local) {
-                    if(neww.id==old.id) old.cost=neww.cost;
-                }
-            }
+            // cout<<recv_msg<<'\n';
+            parse_on(recv_msg,adj,siz);
             seq++;
             graph[self]=to_nodeinfo(adj,self);
             graph[self].seq=seq;
@@ -258,16 +258,14 @@ int main(int argc,char** argv) {
             unsigned int len=sizeof(sockaddr);
 
             sockaddr_in sock;
-            ssize_t ret=recvfrom(sd_udp,s,1024,0,(sockaddr*)&sock,&len);
+            auto ret=recvfrom(sd_udp,s,1024,0,(sockaddr*)&sock,&len);
 
             if(ret>0) {
-                cout<<s<<'\n';
+                // cout<<s<<'\n';
                 nodeinfo ls=parse_lsp(s,ret);
                 if(graph.find(ls.id)==graph.end()) {
                     graph.insert({ls.id,ls});
 
-                    // string temp(s);
-                    // const char* msg=temp.c_str();
                     for(auto& neigh:adj) {
                         if(neigh.id!=self) sendto(sd_udp,s,ret,0,(sockaddr*)&neigh.sock,sizeof(sockaddr));
                     }
@@ -276,8 +274,6 @@ int main(int argc,char** argv) {
                 else if(ls.seq>graph[ls.id].seq) {
                     graph[ls.id]=ls;
 
-                    // string temp(s);
-                    // const char* msg=temp.c_str();
                     for(auto& neigh:adj) {
                         if(neigh.id!=self) sendto(sd_udp,s,ret,0,(sockaddr*)&neigh.sock,sizeof(sockaddr));
                     }
@@ -286,6 +282,7 @@ int main(int argc,char** argv) {
         }
 
         if(steady_clock::now()>=next_lsp) {
+            cout<<"Periodic message\n";
             next_lsp+=seconds(10);
             seq++;
             graph[self].seq=seq;
@@ -295,6 +292,7 @@ int main(int argc,char** argv) {
                 if(neigh.id!=self) sendto(sd_udp,msg,temp.length(),0,(sockaddr*)&neigh.sock,sizeof(sockaddr));
             }
             start=steady_clock::now();
+            print_graph(graph);
         }
 
     }
