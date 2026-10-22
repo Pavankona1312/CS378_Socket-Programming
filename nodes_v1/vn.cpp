@@ -90,7 +90,7 @@ nodeinfo parse_lsp(const uint8_t* p, ssize_t n) {
     ls.seq = -1;
     if (n < 6) return ls;
 
-    ls.id = p[0] - 'A';
+    ls.id = p[0]-'A';
 
     uint32_t seq_n;
     memcpy(&seq_n, p + 1, 4);
@@ -221,7 +221,6 @@ int main(int argc,char** argv) {
     fd_set read_fds;
     auto next_lsp=steady_clock::now()+seconds(10);
     while(1) {
-
         FD_ZERO(&read_fds);;
         FD_SET(sd_tcp,&read_fds);
         FD_SET(sd_udp,&read_fds);
