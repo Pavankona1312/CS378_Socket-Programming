@@ -54,7 +54,8 @@ public class OracleNode {
             matrix[t][t2]=matrix[t2][t];
         }
     }
-    String info[] = new String[n];
+    byte[][] ip = new byte[n][4];
+    int[] port = new int[n];
     // create a selector
     Selector selector = Selector.open();
 
@@ -75,13 +76,14 @@ public class OracleNode {
 
         while(iter.hasNext()){
             SelectionKey key = iter.next();
+            iter.remove();
             if(key.isAcceptable()){
                 // got a vn connection !! accept it
                 ServerSocketChannel nusoc = (ServerSocketChannel)key.channel();
                 SocketChannel clichan = nusoc.accept(); clichan.configureBlocking(false);
                 
                 // register the channel to the selector
-                SelectionKey tmp = clichan.register(selector, SelectionKey.OP_READ | SelectionKey.OP_WRITE);
+                SelectionKey tmp = clichan.register(selector, SelectionKey.OP_READ|SelectionKey.OP_WRITE);
                 tmp.attach(num);
                 num++;
             }
@@ -96,11 +98,15 @@ public class OracleNode {
                     continue;
                 }
                 buffer.flip();
-                String recmsg = new String(buffer.array(),0,numbytes);
+                // String recmsg = new String(buffer.array(),0,numbytes);
                 int node = (int)key.attachment();
-                System.out.println("Recieved: " + recmsg + " from " + node);
                 if(node<n){
-                    info[node] = recmsg;
+                    byte[] ip_node = new byte[4];
+                    buffer.get(ip_node);
+                    int port_node = buffer.getShort() & 0xFFFF;
+                    ip[node] = ip_node;
+                    port[node] = port_node;
+                    System.out.println("Recieved: "  + ip_node + " " + port_node + " from " + node);
                     num_connects++;
                     if(num_connects>=n){
                         connects_done=true;
@@ -108,7 +114,6 @@ public class OracleNode {
                 }
                 if(connects_done) break;
             }
-            iter.remove();
         }
         if(connects_done) break;
     }
@@ -145,23 +150,28 @@ public class OracleNode {
     Iterator<SelectionKey> all_keys_iter = allkeys.iterator();
     while(all_keys_iter.hasNext()){
         SelectionKey key = all_keys_iter.next();
+        // all_keys_iter.remove();
         if(key.isWritable()){
             int node = (int)key.attachment();
-            if(node>=n) {all_keys_iter.remove(); continue;}
+            if(node>=n) continue;
+
             buffer.clear();
             SocketChannel clichan = (SocketChannel)key.channel();
             // int[] neighbours = matrix[node];
             for(int i=0;i<n;i++){
                 if(matrix[node][i]>=0){
-                    char letter = (char) ('A' + i);
-                    String message = letter + " " + info[i] + " " + matrix[node][i] + "\n";
-                    buffer.put(message.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                    // char letter = (char) ('A' + i);
+                    buffer.put((byte) ('A' + i));
+                    buffer.put(ip[i]);
+                    buffer.putShort((short) port[i]);
+                    buffer.putInt(matrix[node][i]); 
                 }
             }
             buffer.flip();
-            clichan.write(buffer);
+            while (buffer.hasRemaining()) {
+                clichan.write(buffer);
+            }
         }
-        // all_keys_iter.remove();
     }
     
  }

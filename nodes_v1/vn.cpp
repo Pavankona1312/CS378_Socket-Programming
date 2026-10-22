@@ -27,10 +27,85 @@ struct nodeinfo {
     int seq;
 };
 
-vector<neighbour> parse_on(const char* c);
-nodeinfo to_nodeinfo(const vector<neighbour>& v,int self);
-string make_lsp(const nodeinfo& v);
-nodeinfo parse_lsp(const char* c);
+
+vector<neighbour> parse_on(const uint8_t* p, ssize_t n) {
+    vector<neighbour> v;
+    for (size_t off=0; off+11<=(size_t)n; off+=11) {
+        neighbour nb;
+        nb.id = p[off]-'A';
+
+        char ipstr[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, p+off+1, ipstr, sizeof(ipstr));
+        nb.ip = ipstr;
+
+        uint16_t port_n;
+        memcpy(&port_n, p+off+5, 2);
+        nb.port = ntohs(port_n);
+
+        uint32_t cost_n;
+        memcpy(&cost_n, p+off+7, 4);
+        nb.cost = (int32_t)ntohl(cost_n);
+
+        memset(&nb.sock, 0, sizeof(nb.sock));
+        nb.sock.sin_family = AF_INET;
+        nb.sock.sin_port = htons(nb.port);
+        inet_pton(AF_INET, nb.ip.c_str(), &nb.sock.sin_addr);
+
+        v.push_back(nb);
+    }
+    return v;
+}
+
+nodeinfo to_nodeinfo(const vector<neighbour>& v, int self) {
+    nodeinfo ni;
+    ni.id = self;
+    ni.seq = 0;
+    for (const auto& nb : v) {
+        if (nb.id != self && nb.cost >= 0)
+            ni.adj.push_back({nb.id, nb.cost});
+    }
+    return ni;
+}
+
+string make_lsp(const nodeinfo& v) {
+    string out;
+    out.push_back((char)('A' + v.id));
+
+    uint32_t seq_n = htonl((uint32_t)v.seq);
+    out.append((const char*)&seq_n, 4);
+
+    out.push_back((char)v.adj.size());
+
+    for (const auto& e : v.adj) {
+        out.push_back((char)('A' + e.first));
+        uint32_t cost_n = htonl((uint32_t)e.second);
+        out.append((const char*)&cost_n, 4);
+    }
+    return out;
+}
+
+nodeinfo parse_lsp(const uint8_t* p, ssize_t n) {
+    nodeinfo ls;
+    ls.id = -1;           // -1 means malformed
+    ls.seq = -1;
+    if (n < 6) return ls;
+
+    ls.id = p[0] - 'A';
+
+    uint32_t seq_n;
+    memcpy(&seq_n, p + 1, 4);
+    ls.seq = (int)ntohl(seq_n);
+
+    size_t count = p[5];
+    size_t off = 6;
+    for (size_t i = 0; i < count && off + 5 <= (size_t)n; i++, off += 5) {
+        int nid = p[off] - 'A';
+        uint32_t cost_n;
+        memcpy(&cost_n, p + off + 1, 4);
+        ls.adj.push_back({nid, (int)(int32_t)ntohl(cost_n)});
+    }
+    return ls;
+}
 
 int main(int argc,char** argv) {
     int port_on;
@@ -62,9 +137,11 @@ int main(int argc,char** argv) {
     const char* ip_vn_c=ip_vn.c_str();
     sock_udp.sin_addr.s_addr=inet_addr(ip_vn_c);
     memset(&sock_udp.sin_zero,'\0',8);
-    if(bind(sd_udp,(sockaddr*)&sock_udp,sizeof(sockaddr))<0) {
-        cerr<<"Binding failed\n";
-        return -1;
+    if (::bind(sd_udp, reinterpret_cast<sockaddr*>(&sock_udp),
+               sizeof(sock_udp)) < 0) {
+        perror("UDP bind");
+        close(sd_udp);
+        return 1;
     }
 
     int sd_tcp=socket(AF_INET,SOCK_STREAM,0);
@@ -100,18 +177,19 @@ int main(int argc,char** argv) {
     // c=stoi(ip_on.substr(idx[1]+1,idx[2]-idx[1]-1));
     // d=stoi(ip_on.substr(idx[2]+1,ip_on.length()-idx[2]-1));
     // long long msg=port_udp+(100000*(d+256*(c+256*(b+256*a))));
-    string s=ip_vn+" "+to_string(port_udp);
-    const char* send_msg=s.c_str();
-
-    send(sd_tcp,send_msg,s.length(),0);
+    uint8_t reg[6];
+    inet_pton(AF_INET, ip_vn.c_str(), reg);
+    uint16_t p = htons((uint16_t)port_udp);
+    memcpy(reg + 4, &p, 2);
+    send(sd_tcp, reg, sizeof(reg), 0);
 
     vector<neighbour> adj;
     map<int,nodeinfo> graph;
-    char recv_msg[100];
-    recv(sd_tcp,recv_msg,100,0);
+    uint8_t recv_msg[1024];
+    ssize_t siz = recv(sd_tcp,recv_msg,1024,0);
     fcntl(sd_tcp, F_SETFL, O_NONBLOCK);
-    cout<<recv_msg<<'\n';
-    adj=parse_on(recv_msg);
+    if(siz<=0) {cout << "Oracle Node closed the TCP connection.\n"; return -1;}
+    adj=parse_on(recv_msg,siz);
     int self=-1;
     int seq=-1;
     auto start=steady_clock::now();
@@ -156,10 +234,10 @@ int main(int argc,char** argv) {
         }
 
         if(FD_ISSET(sd_tcp,&read_fds)) {
-            char recv_msg[100];
-            recv(sd_tcp,recv_msg,100,0);
+            uint8_t recv_msg[1024];
+            ssize_t siz = recv(sd_tcp,recv_msg,1024,0);
             cout<<recv_msg<<'\n';
-            vector<neighbour> new_local=parse_on(recv_msg);
+            vector<neighbour> new_local=parse_on(recv_msg, siz);
             for(auto &old:adj) {
                 for(auto neww:new_local) {
                     if(neww.id==old.id) old.cost=neww.cost;
@@ -177,32 +255,32 @@ int main(int argc,char** argv) {
         }
 
         if(FD_ISSET(sd_udp,&read_fds)) {
-            char s[100];
+            uint8_t s[1024];
             unsigned int len=sizeof(sockaddr);
 
             sockaddr_in sock;
-            auto ret=recvfrom(sd_udp,s,100,0,(sockaddr*)&sock,&len);
+            ssize_t ret=recvfrom(sd_udp,s,1024,0,(sockaddr*)&sock,&len);
 
             if(ret>0) {
                 cout<<s<<'\n';
-                nodeinfo ls=parse_lsp(s);
+                nodeinfo ls=parse_lsp(s,ret);
                 if(graph.find(ls.id)==graph.end()) {
                     graph.insert({ls.id,ls});
 
-                    string temp(s);
-                    const char* msg=temp.c_str();
+                    // string temp(s);
+                    // const char* msg=temp.c_str();
                     for(auto& neigh:adj) {
-                        if(neigh.id!=self) sendto(sd_udp,msg,temp.length(),0,(sockaddr*)&neigh.sock,sizeof(sockaddr));
+                        if(neigh.id!=self) sendto(sd_udp,s,ret,0,(sockaddr*)&neigh.sock,sizeof(sockaddr));
                     }
                 }
 
                 else if(ls.seq>graph[ls.id].seq) {
                     graph[ls.id]=ls;
 
-                    string temp(s);
-                    const char* msg=temp.c_str();
+                    // string temp(s);
+                    // const char* msg=temp.c_str();
                     for(auto& neigh:adj) {
-                        if(neigh.id!=self) sendto(sd_udp,msg,temp.length(),0,(sockaddr*)&neigh.sock,sizeof(sockaddr));
+                        if(neigh.id!=self) sendto(sd_udp,s,ret,0,(sockaddr*)&neigh.sock,sizeof(sockaddr));
                     }
                 }
             }
