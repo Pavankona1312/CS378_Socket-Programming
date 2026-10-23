@@ -63,50 +63,43 @@ void parse_on(const uint8_t* p,vector<neighbour>& v,ssize_t n) {
 
 nodeinfo to_nodeinfo(const vector<neighbour>& v, int self) {
     nodeinfo ni;
-    ni.id = self;
-    ni.seq = 0;
-    for (const auto& nb : v) {
-        if (nb.id != self && nb.cost >= 0)
-            ni.adj.insert({nb.id, nb.cost});
+    ni.id=self;
+    ni.seq=0;
+    for(const auto& nb:v) {
+        if(nb.id!=self&&nb.cost>=0) ni.adj.insert({nb.id,nb.cost});
     }
     return ni;
 }
 
 string make_lsp(const nodeinfo& v) {
     string out;
-    out.push_back((char)('A' + v.id));
-
-    uint32_t seq_n = htonl((uint32_t)v.seq);
-    out.append((const char*)&seq_n, 4);
-
+    out.push_back((char)('A'+v.id));
+    uint32_t seq_n=htonl((uint32_t)v.seq);
+    out.append((const char*)&seq_n,4);
     out.push_back((char)v.adj.size());
-
-    for (const auto& e : v.adj) {
-        out.push_back((char)('A' + e.first));
-        uint32_t cost_n = htonl((uint32_t)e.second);
-        out.append((const char*)&cost_n, 4);
+    for(const auto& e:v.adj) {
+        out.push_back((char)('A'+e.first));
+        uint32_t cost_n=htonl((uint32_t)e.second);
+        out.append((const char*)&cost_n,4);
     }
     return out;
 }
 
 nodeinfo parse_lsp(const uint8_t* p, ssize_t n) {
     nodeinfo ls;
-    ls.id = -1;           // -1 means malformed
-    ls.seq = -1;
-    if (n < 6) return ls;
-
-    ls.id = p[0] - 'A';
-
+    ls.id=-1;           // -1 means malformed
+    ls.seq=-1;
+    if(n<6) return ls;
+    ls.id=p[0]-'A';
     uint32_t seq_n;
-    memcpy(&seq_n, p + 1, 4);
-    ls.seq = (int)ntohl(seq_n);
-
-    size_t count = p[5];
-    size_t off = 6;
-    for (size_t i = 0; i < count && off + 5 <= (size_t)n; i++, off += 5) {
-        int nid = p[off] - 'A';
+    memcpy(&seq_n,p+1,4);
+    ls.seq=(int)ntohl(seq_n);
+    size_t count=p[5];
+    size_t off=6;
+    for(size_t i=0;i<count&&off+5<=(size_t)n;i++,off+=5) {
+        int nid=p[off]-'A';
         uint32_t cost_n;
-        memcpy(&cost_n, p + off + 1, 4);
+        memcpy(&cost_n,p+off+1,4);
         ls.adj[nid]=(int)(int32_t)ntohl(cost_n);
     }
     return ls;
@@ -251,8 +244,8 @@ int main(int argc,char** argv) {
             FD_SET(sd_tcp,&read_fds);
             max_fd=max(max_fd,sd_tcp);
         }
-        auto left=max<long long>(0,duration_cast<microseconds>(next_lsp - steady_clock::now()).count());
-        timeval tv{ (time_t)(left / 1000000), (suseconds_t)(left % 1000000) };
+        auto left=max<long long>(0,duration_cast<microseconds>(next_lsp-steady_clock::now()).count());
+        timeval tv{(time_t)(left/1000000),(suseconds_t)(left%1000000)};
         if(select(max_fd+1,&read_fds,nullptr,nullptr,&tv)<0) {
             cerr<<"Select error\n";
             return -1;
