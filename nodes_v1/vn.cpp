@@ -223,7 +223,6 @@ int main(int argc,char** argv) {
     parse_on(recv_msg,adj,siz);
     int self=-1;
     int seq=-1;
-    auto start=steady_clock::now();
 
     for(auto& neigh:adj) {
         if(neigh.cost==0) {
@@ -248,6 +247,10 @@ int main(int argc,char** argv) {
         FD_SET(sd_tcp,&read_fds);
         FD_SET(sd_udp,&read_fds);
         int max_fd=max(sd_tcp,sd_udp);
+        if(sd_tcp>=0) {
+            FD_SET(sd_tcp,&read_fds);
+            max_fd=max(max_fd,sd_tcp);
+        }
         auto left=max<long long>(0,duration_cast<microseconds>(next_lsp - steady_clock::now()).count());
         timeval tv{ (time_t)(left / 1000000), (suseconds_t)(left % 1000000) };
         if(select(max_fd+1,&read_fds,nullptr,nullptr,&tv)<0) {
@@ -255,19 +258,30 @@ int main(int argc,char** argv) {
             return -1;
         }
 
-        if(FD_ISSET(sd_tcp,&read_fds)) {
+        if(sd_tcp>=0&&FD_ISSET(sd_tcp,&read_fds)) {
             uint8_t recv_msg[1024];
             ssize_t siz = recv(sd_tcp,recv_msg,1024,0);
             // cout<<recv_msg<<'\n';
-            parse_on(recv_msg,adj,siz);
-            seq++;
-            graph[self]=to_nodeinfo(adj,self);
-            graph[self].seq=seq;
+            if(siz==0) {
+                cout<<"ON closed connection. Continuing with last known topology\n";
+                close(sd_tcp); sd_tcp=-1;
+            }
+            else if(siz<0) {
+                if(errno!=EAGAIN && errno!=EWOULDBLOCK && errno!=EINTR) {
+                    perror("recv"); close(sd_tcp); sd_tcp=-1;
+                }
+            }
+            else {
+                parse_on(recv_msg,adj,siz);
+                seq++;
+                graph[self]=to_nodeinfo(adj,self);
+                graph[self].seq=seq;
 
-            string temp=make_lsp(graph[self]);
-            const char* msg=temp.c_str();
-            for(auto& neigh:adj) {
-                if(neigh.id!=self) send_reliably(sd_udp,msg,temp.length(),neigh.sock);
+                string temp=make_lsp(graph[self]);
+                const char* msg=temp.c_str();
+                for(auto& neigh:adj) {
+                    if(neigh.id!=self) send_reliably(sd_udp,msg,temp.length(),neigh.sock);
+                }
             }
         }
 
@@ -309,7 +323,6 @@ int main(int argc,char** argv) {
             for(auto& neigh:adj) {
                 if(neigh.id!=self) send_reliably(sd_udp,msg,temp.length(),neigh.sock);
             }
-            start=steady_clock::now();
             print_graph(graph);
         }
 
