@@ -135,20 +135,22 @@ void send_reliably(int fd,const char* msg,int len,sockaddr_in sock) {
 int main(int argc,char** argv) {
     int port_on;
     int port_udp;
-    if(argc==3) {
+    string ip_vn;
+    if(argc==4) {
         port_on=5000;
-        port_udp=stoi(argv[2]);
-    }
-    else if(argc==4) {
-        port_on=stoi(argv[2]);
+        ip_vn=string(argv[2]);
         port_udp=stoi(argv[3]);
+    }
+    else if(argc==5) {
+        port_on=stoi(argv[2]);
+        port_udp=stoi(argv[4]);
+        ip_vn=string(argv[3]);
     }
     else {
         cerr<<"Incorrect arguments\n";
         return -1;
     }
     string ip_on=string(argv[1]);
-    string ip_vn="127.0.0.1";
 
     int sd_udp=socket(AF_INET,SOCK_DGRAM,0);
     if(sd_udp<0) {
@@ -286,9 +288,17 @@ int main(int argc,char** argv) {
             unsigned int len=sizeof(sockaddr);
 
             sockaddr_in sock;
-            auto ret=recvfrom(sd_udp,s,1024,0,(sockaddr*)&sock,&len);
+            ssize_t ret;
+            do {
+                ret=recvfrom(sd_udp,s,1024,0,(sockaddr*)&sock,&len);
+            } while(ret<0&&errno==EINTR);
 
-            if(ret>0) {
+            if(ret<0) {
+                if(errno!=EAGAIN&&errno!=EWOULDBLOCK) {
+                    perror("recvfrom UDP");
+                }
+            }
+            else if(ret>0) {
                 // cout<<s<<'\n';
                 nodeinfo ls=parse_lsp(s,ret);
                 if(graph.find(ls.id)==graph.end()) {
