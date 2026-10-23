@@ -54,9 +54,11 @@ void parse_on(const uint8_t* p,vector<neighbour>& v,ssize_t n) {
         nb.sock.sin_port=htons(nb.port);
         const char* ip_c=nb.ip.c_str();
         nb.sock.sin_addr.s_addr=inet_addr(ip_c);
+        cout<<p[off]<<'='<<nb.cost<<" ";
 
         v.push_back(nb);
     }
+    cout<<'\n';
 }
 
 nodeinfo to_nodeinfo(const vector<neighbour>& v, int self) {
