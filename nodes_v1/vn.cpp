@@ -112,9 +112,9 @@ void print_graph(const map<int,nodeinfo>& graph) {
     // Periodic print
     for(auto [id,info]:graph) {
         auto adj=info.adj;
-        cout<<"From "<<id<<": ";
+        cout<<(char)(id+'A')<<"'s neighbours: ";
         for(auto [n,cost]:adj) {
-            cout<<n<<"-"<<cost<<" ";
+            cout<<(char)('A'+n)<<"="<<cost<<" ";
         }
         cout<<"\n";
     }
