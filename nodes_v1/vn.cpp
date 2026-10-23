@@ -112,7 +112,7 @@ nodeinfo parse_lsp(const uint8_t* p, ssize_t n) {
     return ls;
 }
 
-void print_graph(map<int,nodeinfo> graph) {
+void print_graph(const map<int,nodeinfo>& graph) {
     for(auto [id,info]:graph) {
         auto adj=info.adj;
         cout<<"From "<<id<<": ";
@@ -120,6 +120,22 @@ void print_graph(map<int,nodeinfo> graph) {
             cout<<n<<"-"<<cost<<" ";
         }
         cout<<"\n";
+    }
+}
+
+void send_reliably(int fd,const char* msg,int len,sockaddr_in sock) {
+    for(int i=0;i<2;i++) {
+        ssize_t n;
+        do {
+            n=sendto(fd,msg,len,0,(sockaddr*)&sock,sizeof(sockaddr));
+        } while(n<0&&errno==EINTR);
+        if(n<0) {
+            perror("sendto");
+        }
+        else if(static_cast<size_t>(n)!=len) {
+            cerr<<"Sendto: incomplete UDP datagram\n";
+            // exit(1);
+        }
     }
 }
 
@@ -221,7 +237,7 @@ int main(int argc,char** argv) {
     string temp=make_lsp(graph[self]);
     const char* msg=temp.c_str();
     for(auto& neigh:adj) {
-        if(neigh.id!=self) sendto(sd_udp,msg,temp.length(),0,(sockaddr*)&neigh.sock,sizeof(sockaddr));
+        if(neigh.id!=self) send_reliably(sd_udp,msg,temp.length(),neigh.sock);
     }
 
     fd_set read_fds;
@@ -251,7 +267,7 @@ int main(int argc,char** argv) {
             string temp=make_lsp(graph[self]);
             const char* msg=temp.c_str();
             for(auto& neigh:adj) {
-                if(neigh.id!=self) sendto(sd_udp,msg,temp.length(),0,(sockaddr*)&neigh.sock,sizeof(sockaddr));
+                if(neigh.id!=self) send_reliably(sd_udp,msg,temp.length(),neigh.sock);
             }
         }
 
@@ -269,7 +285,7 @@ int main(int argc,char** argv) {
                     graph.insert({ls.id,ls});
 
                     for(auto& neigh:adj) {
-                        if(neigh.id!=self) sendto(sd_udp,s,ret,0,(sockaddr*)&neigh.sock,sizeof(sockaddr));
+                        if(neigh.id!=self) send_reliably(sd_udp,(char*)s,ret,neigh.sock);
                     }
                 }
 
@@ -277,7 +293,7 @@ int main(int argc,char** argv) {
                     graph[ls.id]=ls;
 
                     for(auto& neigh:adj) {
-                        if(neigh.id!=self) sendto(sd_udp,s,ret,0,(sockaddr*)&neigh.sock,sizeof(sockaddr));
+                        if(neigh.id!=self) send_reliably(sd_udp,(char*)s,ret,neigh.sock);
                     }
                 }
             }
@@ -291,7 +307,7 @@ int main(int argc,char** argv) {
             string temp=make_lsp(graph[self]);
             const char* msg=temp.c_str();
             for(auto& neigh:adj) {
-                if(neigh.id!=self) sendto(sd_udp,msg,temp.length(),0,(sockaddr*)&neigh.sock,sizeof(sockaddr));
+                if(neigh.id!=self) send_reliably(sd_udp,msg,temp.length(),neigh.sock);
             }
             start=steady_clock::now();
             print_graph(graph);
