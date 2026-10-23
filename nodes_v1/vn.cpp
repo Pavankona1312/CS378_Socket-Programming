@@ -201,17 +201,20 @@ int main(int argc,char** argv) {
     // d=stoi(ip_on.substr(idx[2]+1,ip_on.length()-idx[2]-1));
     // long long msg=port_udp+(100000*(d+256*(c+256*(b+256*a))));
     uint8_t reg[6];
-    inet_pton(AF_INET, ip_vn.c_str(), reg);
-    uint16_t p = htons((uint16_t)port_udp);
-    memcpy(reg + 4, &p, 2);
-    send(sd_tcp, reg, sizeof(reg), 0);
+    inet_pton(AF_INET,ip_vn.c_str(),reg);
+    uint16_t p=htons((uint16_t)port_udp);
+    memcpy(reg+4,&p,2);
+    send(sd_tcp,reg,sizeof(reg),0);
 
     vector<neighbour> adj;
     map<int,nodeinfo> graph;
     uint8_t recv_msg[1024];
-    ssize_t siz = recv(sd_tcp,recv_msg,1024,0);
-    fcntl(sd_tcp, F_SETFL, O_NONBLOCK);
-    if(siz<=0) {cout << "Oracle Node closed the TCP connection.\n"; return -1;}
+    ssize_t siz=recv(sd_tcp,recv_msg,1024,0);
+    fcntl(sd_tcp,F_SETFL,O_NONBLOCK);
+    if(siz<=0) {
+        cout<<"Oracle Node closed the TCP connection.\n";
+        return -1;
+    }
     // cout<<recv_msg<<'\n';
     parse_on(recv_msg,adj,siz);
     int self=-1;
