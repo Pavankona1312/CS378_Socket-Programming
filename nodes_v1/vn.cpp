@@ -32,11 +32,12 @@ public:
 };
 
 void parse_on(const uint8_t* p,vector<neighbour>& v,ssize_t n) {
+    // Converts ON msg to the neighbour state
+
     v.clear();
     for(size_t off=0;off+11<=(size_t)n;off+=11) {
         neighbour nb;
         nb.id=p[off]-'A';
-
         char ipstr[INET_ADDRSTRLEN];
         inet_ntop(AF_INET,p+off+1,ipstr,sizeof(ipstr));
         nb.ip=ipstr;
@@ -55,13 +56,13 @@ void parse_on(const uint8_t* p,vector<neighbour>& v,ssize_t n) {
         const char* ip_c=nb.ip.c_str();
         nb.sock.sin_addr.s_addr=inet_addr(ip_c);
         cout<<p[off]<<'='<<nb.cost<<" ";
-
         v.push_back(nb);
     }
     cout<<'\n';
 }
 
 nodeinfo to_nodeinfo(const vector<neighbour>& v, int self) {
+    // Converts neighbour state to the LSP suitable form
     nodeinfo ni;
     ni.id=self;
     ni.seq=0;
@@ -72,6 +73,7 @@ nodeinfo to_nodeinfo(const vector<neighbour>& v, int self) {
 }
 
 string make_lsp(const nodeinfo& v) {
+    // Converts nodeinfo to LSP msg
     string out;
     out.push_back((char)('A'+v.id));
     uint32_t seq_n=htonl((uint32_t)v.seq);
@@ -86,6 +88,7 @@ string make_lsp(const nodeinfo& v) {
 }
 
 nodeinfo parse_lsp(const uint8_t* p, ssize_t n) {
+    // LSP msg to nodeinfo
     nodeinfo ls;
     ls.id=-1;           // -1 means malformed
     ls.seq=-1;
@@ -106,6 +109,7 @@ nodeinfo parse_lsp(const uint8_t* p, ssize_t n) {
 }
 
 void print_graph(const map<int,nodeinfo>& graph) {
+    // Periodic print
     for(auto [id,info]:graph) {
         auto adj=info.adj;
         cout<<"From "<<id<<": ";
@@ -117,6 +121,7 @@ void print_graph(const map<int,nodeinfo>& graph) {
 }
 
 void send_reliably(int fd,const char* msg,int len,sockaddr_in sock) {
+    // Double msg and error handle
     for(int i=0;i<2;i++) {
         ssize_t n;
         do {
@@ -133,6 +138,7 @@ void send_reliably(int fd,const char* msg,int len,sockaddr_in sock) {
 }
 
 int main(int argc,char** argv) {
+    // Argument parse
     int port_on;
     int port_udp;
     string ip_vn;
@@ -152,6 +158,7 @@ int main(int argc,char** argv) {
     }
     string ip_on=string(argv[1]);
 
+    // Socket and Binding(UDP)
     int sd_udp=socket(AF_INET,SOCK_DGRAM,0);
     if(sd_udp<0) {
         cerr<<"Socket allocation failed\n";
@@ -169,6 +176,7 @@ int main(int argc,char** argv) {
         return -1;
     }
 
+    // Socket and Binding(TCP)
     int sd_tcp=socket(AF_INET,SOCK_STREAM,0);
     if(sd_tcp<0) {
         cerr<<"Socket allocation failed\n";
@@ -202,12 +210,15 @@ int main(int argc,char** argv) {
     // c=stoi(ip_on.substr(idx[1]+1,idx[2]-idx[1]-1));
     // d=stoi(ip_on.substr(idx[2]+1,ip_on.length()-idx[2]-1));
     // long long msg=port_udp+(100000*(d+256*(c+256*(b+256*a))));
+
+    // CONNECT msg
     uint8_t reg[6];
     inet_pton(AF_INET,ip_vn.c_str(),reg);
     uint16_t p=htons((uint16_t)port_udp);
     memcpy(reg+4,&p,2);
     send(sd_tcp,reg,sizeof(reg),0);
 
+    // First link state
     vector<neighbour> adj;
     map<int,nodeinfo> graph;
     uint8_t recv_msg[1024];
@@ -218,6 +229,8 @@ int main(int argc,char** argv) {
         return -1;
     }
     // cout<<recv_msg<<'\n';
+
+    // Initialise structures
     parse_on(recv_msg,adj,siz);
     int self=-1;
     int seq=-1;
@@ -231,6 +244,7 @@ int main(int argc,char** argv) {
     graph.insert({self,to_nodeinfo(adj,self)});
     graph[self].seq=seq;
 
+    // Send first LSP
     string temp=make_lsp(graph[self]);
     const char* msg=temp.c_str();
     for(auto& neigh:adj) {
@@ -241,22 +255,28 @@ int main(int argc,char** argv) {
     auto next_lsp=steady_clock::now()+seconds(10);
     while(1) {
 
+        // Reset garbage fds
         FD_ZERO(&read_fds);;
         FD_SET(sd_tcp,&read_fds);
         FD_SET(sd_udp,&read_fds);
         int max_fd=max(sd_tcp,sd_udp);
+
+        // TCP's connection check
         if(sd_tcp>=0) {
             FD_SET(sd_tcp,&read_fds);
             max_fd=max(max_fd,sd_tcp);
         }
         auto left=max<long long>(0,duration_cast<microseconds>(next_lsp-steady_clock::now()).count());
         timeval tv{(time_t)(left/1000000),(suseconds_t)(left%1000000)};
+
+        // Select checks
         if(select(max_fd+1,&read_fds,nullptr,nullptr,&tv)<0) {
             cerr<<"Select error\n";
             return -1;
         }
 
         if(sd_tcp>=0&&FD_ISSET(sd_tcp,&read_fds)) {
+            // ON receive
             uint8_t recv_msg[1024];
             ssize_t siz = recv(sd_tcp,recv_msg,1024,0);
             // cout<<recv_msg<<'\n';
@@ -284,6 +304,7 @@ int main(int argc,char** argv) {
         }
 
         if(FD_ISSET(sd_udp,&read_fds)) {
+            // UDP receive
             uint8_t s[1024];
             unsigned int len=sizeof(sockaddr);
 
@@ -301,6 +322,7 @@ int main(int argc,char** argv) {
             else if(ret>0) {
                 // cout<<s<<'\n';
                 nodeinfo ls=parse_lsp(s,ret);
+                // First LSP from that node
                 if(graph.find(ls.id)==graph.end()) {
                     graph.insert({ls.id,ls});
 
@@ -309,6 +331,7 @@ int main(int argc,char** argv) {
                     }
                 }
 
+                // New LSP
                 else if(ls.seq>graph[ls.id].seq) {
                     graph[ls.id]=ls;
 
